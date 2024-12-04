@@ -5,7 +5,7 @@ This is a stock market predictor that uses Skikit-learn to train a machine learn
 ## Files
 - `app.py`: Contains all methods for a market predictor
 ## Requirements
-- Python 3.x
+- `Python 3.x`
 - `streamlit`
 - `yfinance`
 - `pandas`
