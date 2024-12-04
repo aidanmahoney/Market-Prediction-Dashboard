@@ -12,5 +12,5 @@ This is a stock market predictor that uses Skikit-learn to train a machine learn
 - `scikit-learn`
 - `numpy`
 ## Credits
-Aidan Mahoney
-Yahoo Finance
+- Aidan Mahoney
+- Yahoo Finance
