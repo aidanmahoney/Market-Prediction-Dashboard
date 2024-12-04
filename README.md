@@ -1,4 +1,4 @@
-# Market Predictor
+# Market Prediction Dashboard
 A market predictor for day traders.
 ## Overview
 This is a stock market predictor that uses Skikit-learn to train a machine learning model with Random Forest Regression. It fetches historical stock price data from Yahoo Finance and trains the model to make future stock price predictions. To use it, simply run the `app.py` file.
