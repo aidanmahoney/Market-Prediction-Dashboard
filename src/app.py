@@ -20,8 +20,8 @@ def create_future_features(df, last_close, days=30, growth_rate=0.07):
         future_sma_50 = np.nan
         future_sma_200 = np.nan
 
-        previous_sma_50 = [adjusted_close] + [x[0] for x in future_features[-49:]]  # Last 50 closes for SMA 50
-        previous_sma_200 = [adjusted_close] + [x[1] for x in future_features[-199:]]  # Last 200 closes for SMA 200
+        previous_sma_50 = [adjusted_close] + [x[0] for x in future_features[-49:]]
+        previous_sma_200 = [adjusted_close] + [x[1] for x in future_features[-199:]]
 
         if len(previous_sma_50) > 0:
             future_sma_50 = np.nanmean(previous_sma_50)
