@@ -16,7 +16,7 @@ This is a stock market predictor that uses Scikit-learn to train a machine learn
 - Yahoo Finance
 ## License
 
-    Copyright [2025] [Aidan Mahoney]
+    Copyright [2024] [Aidan Mahoney]
 
     Licensed under the Apache License, Version 2.0 (the "License");
     you may not use this file except in compliance with the License.
