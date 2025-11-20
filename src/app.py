@@ -3,9 +3,10 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import datetime as dt
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
+from sklearn.preprocessing import StandardScaler
 
 # Page config
 st.set_page_config(
@@ -31,65 +32,233 @@ def create_features(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
     df = df[['Close']].dropna().copy()
     if len(df) < 200:
         raise ValueError("Not enough data to compute indicators.")
+
+    # Lag features (previous day prices - very important for time series!)
+    df['Lag_1'] = df['Close'].shift(1)
+    df['Lag_2'] = df['Close'].shift(2)
+    df['Lag_5'] = df['Close'].shift(5)
+    df['Lag_10'] = df['Close'].shift(10)
+
+    # Moving averages
+    df['SMA_10'] = df['Close'].rolling(window=10).mean()
     df['SMA_50'] = df['Close'].rolling(window=50).mean()
     df['SMA_200'] = df['Close'].rolling(window=200).mean()
-    df['Momentum'] = df['Close'].diff(periods=5)
-    df.dropna(subset=['SMA_50', 'SMA_200', 'Momentum'], inplace=True)
-    X = df[['SMA_50', 'SMA_200', 'Momentum']]
+    df['EMA_12'] = df['Close'].ewm(span=12, adjust=False).mean()
+    df['EMA_26'] = df['Close'].ewm(span=26, adjust=False).mean()
+
+    # Momentum indicators
+    df['Momentum_5'] = df['Close'].diff(periods=5)
+    df['Momentum_10'] = df['Close'].diff(periods=10)
+    df['ROC'] = df['Close'].pct_change(periods=10) * 100  # Rate of Change
+
+    # Volatility
+    df['Volatility_20'] = df['Close'].rolling(window=20).std()
+    df['Volatility_50'] = df['Close'].rolling(window=50).std()
+
+    # RSI (Relative Strength Index)
+    delta = df['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+
+    # MACD
+    df['MACD'] = df['EMA_12'] - df['EMA_26']
+
+    # Bollinger Bands
+    df['BB_middle'] = df['Close'].rolling(window=20).mean()
+    df['BB_std'] = df['Close'].rolling(window=20).std()
+    df['BB_upper'] = df['BB_middle'] + (df['BB_std'] * 2)
+    df['BB_lower'] = df['BB_middle'] - (df['BB_std'] * 2)
+    df['BB_position'] = (df['Close'] - df['BB_lower']) / (df['BB_upper'] - df['BB_lower'])
+
+    # Price position relative to SMAs
+    df['Price_to_SMA10'] = (df['Close'] - df['SMA_10']) / df['SMA_10'] * 100
+    df['Price_to_SMA50'] = (df['Close'] - df['SMA_50']) / df['SMA_50'] * 100
+    df['Price_to_SMA200'] = (df['Close'] - df['SMA_200']) / df['SMA_200'] * 100
+
+    df.dropna(inplace=True)
+
+    X = df[['Lag_1', 'Lag_2', 'Lag_5', 'Lag_10',
+            'SMA_10', 'SMA_50', 'SMA_200', 'EMA_12', 'EMA_26',
+            'Momentum_5', 'Momentum_10', 'ROC',
+            'Volatility_20', 'Volatility_50', 'RSI', 'MACD',
+            'BB_position', 'Price_to_SMA10', 'Price_to_SMA50', 'Price_to_SMA200']]
     y = df['Close']
     return X, y
 
 # Cache the trained model and reuse
 @st.cache_resource
-def train_model(X: pd.DataFrame, y: pd.Series) -> tuple[RandomForestRegressor, float, pd.DatetimeIndex, np.ndarray, pd.Series]:
+def train_model(X: pd.DataFrame, y: pd.Series) -> tuple:
+    # Use time-based split (no shuffle for time series)
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
+        X, y, test_size=0.2, random_state=42, shuffle=False
     )
-    model = RandomForestRegressor(n_estimators=100, random_state=42)
-    model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
+
+    # Scale features for better performance
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+
+    # Use Gradient Boosting - often better than Random Forest for time series
+    model = GradientBoostingRegressor(
+        n_estimators=300,
+        learning_rate=0.05,
+        max_depth=5,
+        min_samples_split=10,
+        min_samples_leaf=4,
+        subsample=0.8,
+        random_state=42,
+        verbose=0
+    )
+
+    model.fit(X_train_scaled, y_train)
+    y_pred = model.predict(X_test_scaled)
+
+    # Calculate multiple metrics
     mse = mean_squared_error(y_test, y_pred)
-    return model, mse, X_test.index, y_pred, y_test
+    rmse = np.sqrt(mse)
+    mae = mean_absolute_error(y_test, y_pred)
+    r2 = r2_score(y_test, y_pred)
+
+    return model, scaler, mse, rmse, mae, r2, X_test.index, y_pred, y_test
 
 # Generate future feature matrix and predictions
 def create_future_features(
     df: pd.DataFrame,
-    model: RandomForestRegressor,
+    model: GradientBoostingRegressor,
+    scaler: StandardScaler,
     last_close: float,
     days: int = 30
 ) -> tuple[pd.DataFrame, list[float]]:
     features: list[list[float]] = []
     predictions: list[float] = []
 
-    # Get recent historical prices for SMA calculations
+    # Get recent historical prices for calculations
     recent_prices = df['Close'].tolist()
 
+    # Calculate historical trends and volatility for realistic bounds
+    hist_returns = df['Close'].pct_change().dropna()
+    hist_volatility = hist_returns.std()
+    hist_mean_return = hist_returns.mean()
+
+    # Calculate recent trend (last 60 days)
+    if len(recent_prices) >= 60:
+        recent_trend = (recent_prices[-1] - recent_prices[-60]) / recent_prices[-60]
+    else:
+        recent_trend = 0.0
+
+    # Dampening factor - reduces as we predict further into future
+    # This prevents extreme runaway predictions
+    base_dampen = 0.85
+
     for i in range(days):
-        # Calculate SMAs from actual prices (historical + predicted so far)
+        # Combine historical and predicted prices
         all_prices = recent_prices + predictions
 
-        if len(all_prices) >= 50:
-            sma50 = float(np.mean(all_prices[-50:]))
+        # Progressive dampening - the further we predict, the more we dampen
+        dampen_factor = base_dampen - (i / days) * 0.15  # ranges from 0.85 to 0.70
+
+        # Current price
+        current_price = all_prices[-1] if predictions else last_close
+
+        # Lag features
+        lag_1 = all_prices[-1] if len(all_prices) >= 1 else current_price
+        lag_2 = all_prices[-2] if len(all_prices) >= 2 else current_price
+        lag_5 = all_prices[-5] if len(all_prices) >= 5 else current_price
+        lag_10 = all_prices[-10] if len(all_prices) >= 10 else current_price
+
+        # Moving averages
+        sma_10 = float(np.mean(all_prices[-10:])) if len(all_prices) >= 10 else current_price
+        sma_50 = float(np.mean(all_prices[-50:])) if len(all_prices) >= 50 else current_price
+        sma_200 = float(np.mean(all_prices[-200:])) if len(all_prices) >= 200 else current_price
+
+        # EMAs
+        if len(all_prices) >= 12:
+            weights_12 = np.exp(np.linspace(-1., 0., 12))
+            weights_12 /= weights_12.sum()
+            ema_12 = float(np.average(all_prices[-12:], weights=weights_12))
         else:
-            sma50 = float(np.mean(all_prices))
+            ema_12 = current_price
 
-        if len(all_prices) >= 200:
-            sma200 = float(np.mean(all_prices[-200:]))
+        if len(all_prices) >= 26:
+            weights_26 = np.exp(np.linspace(-1., 0., 26))
+            weights_26 /= weights_26.sum()
+            ema_26 = float(np.average(all_prices[-26:], weights=weights_26))
         else:
-            sma200 = float(np.mean(all_prices))
+            ema_26 = current_price
 
-        # Calculate momentum as 5-day price change
-        if len(all_prices) >= 5:
-            momentum = float(all_prices[-1] - all_prices[-5])
+        # Momentum
+        momentum_5 = float(all_prices[-1] - all_prices[-5]) if len(all_prices) >= 5 else 0.0
+        momentum_10 = float(all_prices[-1] - all_prices[-10]) if len(all_prices) >= 10 else 0.0
+
+        # Rate of Change
+        roc = float((all_prices[-1] - all_prices[-10]) / all_prices[-10] * 100) if len(all_prices) >= 10 else 0.0
+
+        # Volatility
+        volatility_20 = float(np.std(all_prices[-20:])) if len(all_prices) >= 20 else 0.0
+        volatility_50 = float(np.std(all_prices[-50:])) if len(all_prices) >= 50 else 0.0
+
+        # RSI calculation
+        if len(all_prices) >= 15:
+            price_changes = np.diff(all_prices[-15:])
+            gains = price_changes[price_changes > 0]
+            losses = -price_changes[price_changes < 0]
+            avg_gain = gains.mean() if len(gains) > 0 else 0.0
+            avg_loss = losses.mean() if len(losses) > 0 else 0.0
+            if avg_loss != 0:
+                rs = avg_gain / avg_loss
+                rsi = float(100 - (100 / (1 + rs)))
+            else:
+                rsi = 100.0
         else:
-            momentum = 0.0
+            rsi = 50.0
 
-        # Create feature vector and predict
-        feat_vec = np.array([[sma50, sma200, momentum]])
-        pred = float(model.predict(feat_vec)[0])
+        # MACD
+        macd = ema_12 - ema_26
 
-        features.append([sma50, sma200, momentum])
-        predictions.append(pred)
+        # Bollinger Bands
+        if len(all_prices) >= 20:
+            bb_middle = float(np.mean(all_prices[-20:]))
+            bb_std = float(np.std(all_prices[-20:]))
+            bb_upper = bb_middle + (bb_std * 2)
+            bb_lower = bb_middle - (bb_std * 2)
+            bb_position = (current_price - bb_lower) / (bb_upper - bb_lower) if (bb_upper - bb_lower) != 0 else 0.5
+        else:
+            bb_position = 0.5
+
+        # Price position relative to SMAs
+        price_to_sma10 = float((current_price - sma_10) / sma_10 * 100) if sma_10 != 0 else 0.0
+        price_to_sma50 = float((current_price - sma_50) / sma_50 * 100) if sma_50 != 0 else 0.0
+        price_to_sma200 = float((current_price - sma_200) / sma_200 * 100) if sma_200 != 0 else 0.0
+
+        # Create feature vector (must match training order!)
+        feat_vec = np.array([[lag_1, lag_2, lag_5, lag_10,
+                             sma_10, sma_50, sma_200, ema_12, ema_26,
+                             momentum_5, momentum_10, roc,
+                             volatility_20, volatility_50, rsi, macd,
+                             bb_position, price_to_sma10, price_to_sma50, price_to_sma200]])
+
+        # Scale features
+        feat_vec_scaled = scaler.transform(feat_vec)
+
+        # Predict
+        raw_pred = float(model.predict(feat_vec_scaled)[0])
+
+        # Apply dampening to prevent extreme predictions
+        conservative_pred = all_prices[-1] * (1 + hist_mean_return)
+        pred = raw_pred * dampen_factor + conservative_pred * (1 - dampen_factor)
+
+        # Apply reasonable bounds (max ±2% change per prediction step)
+        max_change = all_prices[-1] * 0.02
+        pred = np.clip(pred, all_prices[-1] - max_change, all_prices[-1] + max_change)
+
+        features.append([lag_1, lag_2, lag_5, lag_10,
+                        sma_10, sma_50, sma_200, ema_12, ema_26,
+                        momentum_5, momentum_10, roc,
+                        volatility_20, volatility_50, rsi, macd,
+                        bb_position, price_to_sma10, price_to_sma50, price_to_sma200])
+        predictions.append(float(pred))
 
     idx = pd.date_range(
         start=df.index[-1] + pd.Timedelta(days=1),
@@ -97,7 +266,11 @@ def create_future_features(
     )
     future_df = pd.DataFrame(
         features,
-        columns=['SMA_50', 'SMA_200', 'Momentum'],
+        columns=['Lag_1', 'Lag_2', 'Lag_5', 'Lag_10',
+                 'SMA_10', 'SMA_50', 'SMA_200', 'EMA_12', 'EMA_26',
+                 'Momentum_5', 'Momentum_10', 'ROC',
+                 'Volatility_20', 'Volatility_50', 'RSI', 'MACD',
+                 'BB_position', 'Price_to_SMA10', 'Price_to_SMA50', 'Price_to_SMA200'],
         index=idx
     )
     return future_df, predictions
@@ -127,14 +300,34 @@ def main() -> None:
         st.error(str(e))
         return
 
-    model, mse, test_idx, y_pred, y_test = train_model(X, y)
+    model, scaler, mse, rmse, mae, r2, test_idx, y_pred, y_test = train_model(X, y)
     st.subheader("Model Performance on Test Set")
-    st.write(f"Mean Squared Error: {mse:.2f}")
+
+    # Display metrics in columns
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("R² Score", f"{r2:.4f}")
+    with col2:
+        st.metric("RMSE", f"${rmse:.2f}")
+    with col3:
+        st.metric("MAE", f"${mae:.2f}")
+    with col4:
+        st.metric("MSE", f"{mse:.2f}")
+
     perf_df = pd.DataFrame(
         {'Actual': y_test, 'Predicted': y_pred},
         index=test_idx
     )
     st.line_chart(perf_df)
+
+    # Show explanation of metrics
+    with st.expander("📊 Understanding Model Metrics"):
+        st.write("""
+        - **R² Score**: Measures how well the model explains variance (1.0 is perfect, closer to 1 is better)
+        - **RMSE**: Root Mean Squared Error - average prediction error in dollars
+        - **MAE**: Mean Absolute Error - average absolute prediction error
+        - **MSE**: Mean Squared Error - penalizes larger errors more heavily
+        """)
 
     years = st.slider(
         "Select forecast horizon (years):", 1, 3, 1
@@ -147,10 +340,26 @@ def main() -> None:
     future_df, future_prices = create_future_features(
         processed,
         model,
+        scaler,
         last_close=processed['Close'].iloc[-1],
         days=future_days
     )
     future_df['Predicted'] = future_prices
+
+    # Calculate prediction confidence intervals (widening over time)
+    hist_volatility = processed['Close'].pct_change().std()
+    confidence_lower = []
+    confidence_upper = []
+
+    for i, price in enumerate(future_prices):
+        # Uncertainty grows with prediction horizon
+        days_ahead = i + 1
+        uncertainty = price * hist_volatility * np.sqrt(days_ahead) * 1.96  # 95% confidence
+        confidence_lower.append(price - uncertainty)
+        confidence_upper.append(price + uncertainty)
+
+    future_df['Lower_95'] = confidence_lower
+    future_df['Upper_95'] = confidence_upper
 
     combined_df = pd.concat(
         [data['Close'], future_df['Predicted']],
@@ -160,6 +369,21 @@ def main() -> None:
 
     st.subheader("Combined Historical and Forecasted Prices")
     st.line_chart(combined_df)
+
+    # Show prediction with confidence intervals
+    st.subheader("Forecast with 95% Confidence Interval")
+    forecast_display = future_df[['Predicted', 'Lower_95', 'Upper_95']].copy()
+    forecast_display.columns = ['Forecast', '95% CI Lower', '95% CI Upper']
+    st.line_chart(forecast_display)
+
+    st.info(
+        "📊 **Understanding the forecast:**\n\n"
+        "- The forecast uses advanced technical indicators (RSI, MACD, EMAs, etc.)\n"
+        "- Dampening is applied to prevent unrealistic extreme predictions\n"
+        "- Each step is limited to ±2% change for stability\n"
+        "- Confidence intervals widen over time, showing increased uncertainty\n"
+        "- Longer-term predictions should be taken with caution"
+    )
 
 if __name__ == "__main__":
     main()
