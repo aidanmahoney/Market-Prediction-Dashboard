@@ -11,7 +11,6 @@ from sklearn.preprocessing import StandardScaler
 # Page config
 st.set_page_config(
     page_title="Market Predictor",
-    page_icon=":chart_increasing:",
     layout="wide"
 )
 
@@ -321,7 +320,7 @@ def main() -> None:
     st.line_chart(perf_df)
 
     # Show explanation of metrics
-    with st.expander("📊 Understanding Model Metrics"):
+    with st.expander("Understanding Model Metrics"):
         st.write("""
         - **R² Score**: Measures how well the model explains variance (1.0 is perfect, closer to 1 is better)
         - **RMSE**: Root Mean Squared Error - average prediction error in dollars
@@ -377,7 +376,7 @@ def main() -> None:
     st.line_chart(forecast_display)
 
     st.info(
-        "📊 **Understanding the forecast:**\n\n"
+        "**Understanding the forecast:**\n\n"
         "- The forecast uses advanced technical indicators (RSI, MACD, EMAs, etc.)\n"
         "- Dampening is applied to prevent unrealistic extreme predictions\n"
         "- Each step is limited to ±2% change for stability\n"
