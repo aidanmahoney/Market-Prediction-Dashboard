@@ -16,7 +16,6 @@ st.set_page_config(
 
 # Cache downloading of historical data
 @st.cache_data
-
 def load_data(ticker: str) -> pd.DataFrame:
     end_date = dt.datetime.today().strftime('%Y-%m-%d')
     data = yf.download(ticker, start="2010-01-01", end=end_date)
@@ -28,7 +27,6 @@ def load_data(ticker: str) -> pd.DataFrame:
 
 # Cache feature engineering
 @st.cache_data
-
 def create_features(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
     df = df[['Close']].dropna().copy()
     if len(df) < 200:
@@ -43,12 +41,11 @@ def create_features(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
 
 # Cache the trained model and reuse
 @st.cache_resource
-
 def train_model(X: pd.DataFrame, y: pd.Series) -> tuple[RandomForestRegressor, float, pd.DatetimeIndex, np.ndarray, pd.Series]:
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42
     )
-    model = RandomForestRegressor()
+    model = RandomForestRegressor(n_estimators=100, random_state=42)
     model.fit(X_train, y_train)
     y_pred = model.predict(X_test)
     mse = mean_squared_error(y_test, y_pred)
@@ -63,28 +60,36 @@ def create_future_features(
 ) -> tuple[pd.DataFrame, list[float]]:
     features: list[list[float]] = []
     predictions: list[float] = []
-    last_mom = float(df['Momentum'].iloc[-1])
-    hist_growth = df['Close'].pct_change().mean()
+
+    # Get recent historical prices for SMA calculations
+    recent_prices = df['Close'].tolist()
 
     for i in range(days):
-        if features:
-            feat_vec = np.array(features[-1]).reshape(1, -1)
+        # Calculate SMAs from actual prices (historical + predicted so far)
+        all_prices = recent_prices + predictions
+
+        if len(all_prices) >= 50:
+            sma50 = float(np.mean(all_prices[-50:]))
         else:
-            base = df[['SMA_50', 'SMA_200']].iloc[-1:].copy()
-            base['Momentum'] = last_mom
-            feat_vec = base.to_numpy().reshape(1, -1)
+            sma50 = float(np.mean(all_prices))
 
+        if len(all_prices) >= 200:
+            sma200 = float(np.mean(all_prices[-200:]))
+        else:
+            sma200 = float(np.mean(all_prices))
+
+        # Calculate momentum as 5-day price change
+        if len(all_prices) >= 5:
+            momentum = float(all_prices[-1] - all_prices[-5])
+        else:
+            momentum = 0.0
+
+        # Create feature vector and predict
+        feat_vec = np.array([[sma50, sma200, momentum]])
         pred = float(model.predict(feat_vec)[0])
-        if i > 0:
-            pred *= (1 + max(hist_growth, 0.0005))
-
-        sma50 = np.mean([pred] + [f[0] for f in features[-49:]]) if len(features) >= 49 else pred
-        sma200 = np.mean([pred] + [f[1] for f in features[-199:]]) if len(features) >= 199 else pred
-        momentum = np.clip((pred - last_close) * 0.02 * (1 - i / (days * 3)), -1, 1)
 
         features.append([sma50, sma200, momentum])
         predictions.append(pred)
-        last_close = pred
 
     idx = pd.date_range(
         start=df.index[-1] + pd.Timedelta(days=1),
@@ -136,10 +141,8 @@ def main() -> None:
     )
     future_days = years * 252
 
-    processed = data[['Close']].copy()
-    processed['SMA_50'] = X['SMA_50']
-    processed['SMA_200'] = X['SMA_200']
-    processed['Momentum'] = X['Momentum']
+    processed = X.copy()
+    processed['Close'] = y
 
     future_df, future_prices = create_future_features(
         processed,
