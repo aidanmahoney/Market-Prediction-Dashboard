@@ -267,7 +267,7 @@ def create_future_features(
 
 # Main dashboard
 def main() -> None:
-    st.title("Market Recovery Prediction Dashboard")
+    st.title("Market Prediction Dashboard")
 
     ticker = st.text_input(
         "Enter stock symbol (e.g., SPY):", value="SPY"
