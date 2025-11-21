@@ -128,7 +128,7 @@ def train_model(X: pd.DataFrame, y: pd.Series, close_prices: pd.Series) -> tuple
     pred_prices = test_close_prices * (1 + y_pred)
     actual_next_prices = test_close_prices * (1 + y_test)
 
-    return model, scaler, mse, rmse, mae, r2, X_test.index, pred_prices, actual_next_prices
+    return model, scaler, mse, rmse, mae, r2, X_test.index, y_test, y_pred, pred_prices, actual_next_prices
 
 # Generate future feature matrix and predictions
 def create_future_features(
@@ -290,7 +290,7 @@ def main() -> None:
         st.error(str(e))
         return
 
-    model, scaler, mse, rmse, mae, r2, test_idx, y_pred, y_test = train_model(X, y, close_prices)
+    model, scaler, mse, rmse, mae, r2, test_idx, y_test, y_pred, pred_prices, actual_next_prices = train_model(X, y, close_prices)
     st.subheader("Model Performance on Test Set")
 
     # Display metrics in columns
@@ -302,13 +302,13 @@ def main() -> None:
     with col3:
         st.metric("MAE", f"{mae*100:.4f}%")
     with col4:
-        # Calculate directional accuracy
+        # Calculate directional accuracy (using returns, not prices)
         correct_direction = sum((y_pred > 0) == (y_test > 0))
         dir_accuracy = correct_direction / len(y_test) * 100
         st.metric("Direction Accuracy", f"{dir_accuracy:.1f}%")
 
     perf_df = pd.DataFrame(
-        {'Actual': y_test, 'Predicted': y_pred},
+        {'Actual': actual_next_prices, 'Predicted': pred_prices},
         index=test_idx
     )
     st.line_chart(perf_df)
