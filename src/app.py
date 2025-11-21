@@ -298,12 +298,12 @@ def main() -> None:
     with col1:
         st.metric("R² Score", f"{r2:.4f}")
     with col2:
-        st.metric("RMSE", f"${rmse:.2f}")
+        st.metric("RMSE", f"{rmse*100:.4f}%")
     with col3:
-        st.metric("MAE", f"${mae:.2f}")
+        st.metric("MAE", f"{mae*100:.4f}%")
     with col4:
         # Calculate directional accuracy
-        correct_direction = sum((y_pred - close_prices.loc[test_idx]) * (y_test - close_prices.loc[test_idx]) > 0)
+        correct_direction = sum((y_pred > 0) == (y_test > 0))
         dir_accuracy = correct_direction / len(y_test) * 100
         st.metric("Direction Accuracy", f"{dir_accuracy:.1f}%")
 
@@ -317,9 +317,9 @@ def main() -> None:
     with st.expander("Understanding Model Metrics"):
         st.write("""
         - **R² Score**: Measures how well the model explains variance (1.0 is perfect, closer to 1 is better)
-        - **RMSE**: Root Mean Squared Error - average prediction error in dollars for next-day prices
-        - **MAE**: Mean Absolute Error - average absolute prediction error in dollars
-        - **Direction Accuracy**: Percentage of times the model correctly predicted the direction of price movement
+        - **RMSE**: Root Mean Squared Error - average prediction error in percentage returns
+        - **MAE**: Mean Absolute Error - average absolute prediction error in percentage returns
+        - **Direction Accuracy**: Percentage of times the model correctly predicted the direction of price movement (up vs down)
 
         Note: The model predicts next-day returns (percentage changes) which are then converted to prices.
         """)
